@@ -11,7 +11,14 @@ import {
   Expression,
   FillSymbolizer,
   Filter,
+  FunctionCall,
+  GeoStylerFunction,
   IconSymbolizer,
+  isCombinationFilter,
+  isComparisonFilter,
+  isGeoStylerFunction,
+  isGeoStylerNumberFunction,
+  isNegationFilter,
   LineSymbolizer,
   MarkSymbolizer,
   PointSymbolizer,
@@ -26,9 +33,8 @@ import {
   TextSymbolizer,
   UnsupportedProperties,
   WellKnownName,
-  WriteStyleResult
-} from 'geostyler-style/dist/style';
-import { GeoStylerFunction } from 'geostyler-style/dist/functions';
+  WriteStyleResult,
+} from 'geostyler-style';
 import {
   X2jOptions,
   XMLBuilder,
@@ -36,7 +42,7 @@ import {
   XMLParser
 } from 'fast-xml-parser';
 
-import { merge } from 'lodash';
+import { isNumber, merge } from 'lodash';
 
 import {
   geoStylerFunctionToSldFunction,
@@ -44,21 +50,21 @@ import {
   getAttribute,
   getChildren,
   getParameterValue,
+  getVendorOptionValue,
   isSymbolizer,
   keysByValue,
   numberExpression
 } from './Util/SldUtil';
-import {
-  isCombinationFilter,
-  isComparisonFilter,
-  isGeoStylerFunction,
-  isGeoStylerNumberFunction,
-  isNegationFilter
-} from 'geostyler-style/dist/typeguards';
 
 const SLD_VERSIONS = ['1.0.0', '1.1.0'] as const;
 
 export type SldVersion = (typeof SLD_VERSIONS)[number];
+
+/** GeoServer allows VendorOptions and mix some SLD versions */
+export const sldEnvGeoServer = 'GeoServer';
+const SLD_ENVIRONMENTS = [sldEnvGeoServer] as const;
+/** Environment Configuration for the SLD parser/writer. */
+export type SldEnvironment = (typeof SLD_ENVIRONMENTS)[number];
 
 export type ParserOptions = Omit<X2jOptions,
 'ignoreDeclaration' |
@@ -80,6 +86,7 @@ export type ConstructorParams = {
   boolFilterFields?: string[];
   /* optional for reading style (it will be guessed from sld style) and mandatory for writing */
   sldVersion?: SldVersion;
+  sldEnvironment?: SldEnvironment;
   symbolizerUnits?: string;
   parserOptions?: ParserOptions;
   builderOptions?: XmlBuilderOptions;
@@ -114,6 +121,15 @@ const COMBINATION_MAP = {
 };
 
 type CombinationType = keyof typeof COMBINATION_MAP;
+
+const ARITHMETIC_OPERATORS = [
+  'add',
+  'sub',
+  'mul',
+  'div',
+] as const;
+
+type ArithmeticType = typeof ARITHMETIC_OPERATORS[number];
 
 export type SldStyleParserTranslationKeys = {
   marksymbolizerParseFailedUnknownWellknownName?: (params: {wellKnownName: string}) => string;
@@ -275,6 +291,7 @@ export class SldStyleParser implements StyleParser<string> {
       preserveOrder: true,
       trimValues: true
     });
+
     this.builder = new XMLBuilder({
       ...opts?.builderOptions,
       // Fixed attributes
@@ -283,8 +300,13 @@ export class SldStyleParser implements StyleParser<string> {
       suppressEmptyNode: true,
       preserveOrder: true
     });
+
     if (opts?.sldVersion) {
       this.sldVersion = opts?.sldVersion;
+    }
+
+    if (opts?.sldEnvironment !== undefined) {
+      this.sldEnvironment = opts.sldEnvironment;
     }
 
     if (opts?.locale) {
@@ -386,6 +408,37 @@ export class SldStyleParser implements StyleParser<string> {
     this._sldVersion = sldVersion;
   }
 
+  /**
+   * Indicate the sld environment to parse the SLD or write the SLD.
+   * This allows or restrict some SLD tags.
+   * @private
+   */
+  private _sldEnvironment: SldEnvironment | null = null;
+
+  /**
+   * Getter for _sldEnvironment
+   * @return SldEnvironment or null.
+   */
+  get sldEnvironment(): SldEnvironment | null {
+    return this._sldEnvironment;
+  }
+
+  /**
+   * Setter for _sldEnvironment
+   * @param a SldEnvironment or null.
+   */
+  set sldEnvironment(env: SldEnvironment | null) {
+    this._sldEnvironment = env;
+  }
+
+  /**
+   * Check if the given SldEnvironment match the current environment.
+   * @param env the SldEnvironment to check.
+   * @private
+   */
+  private isSldEnv(env: SldEnvironment): boolean {
+    return this.sldEnvironment === env;
+  }
 
   /**
    * String indicating the SLD version used in reading mode
@@ -393,9 +446,9 @@ export class SldStyleParser implements StyleParser<string> {
   private _readingSldVersion: SldVersion = '1.0.0';
 
   /**
-     * Getter for _readingSldVersion
-     * @return
-     */
+   * Getter for _readingSldVersion
+   * @return
+   */
   get readingSldVersion(): SldVersion {
     return this._readingSldVersion;
   }
@@ -619,7 +672,7 @@ export class SldStyleParser implements StyleParser<string> {
     let filter: Filter;
 
     if (sldOperatorName === 'Function') {
-      const functionName = sldFilter[0][':@']['@_name'];
+      const functionName = Array.isArray(sldFilter) ? sldFilter[0][':@']['@_name'] : sldFilter[':@']['@_name'];
       const tempFunctionName = functionName.charAt(0).toUpperCase() + functionName.slice(1);
       sldOperatorName = `PropertyIs${tempFunctionName}` as ComparisonType;
     }
@@ -635,28 +688,8 @@ export class SldStyleParser implements StyleParser<string> {
 
       filter = ['<=x<=', propertyName, lower, upper];
     } else if (Object.keys(COMPARISON_MAP).includes(sldOperatorName)) {
-      const comparisonOperator: ComparisonOperator = COMPARISON_MAP[sldOperatorName] as ComparisonOperator;
-      const filterIsFunction = !!get(sldFilter, 'Function');
-      let args: any[] = [];
-      const childrenToArgs = (child: any) => {
-        if (get([child], '#text') !== undefined) {
-          return get([child], '#text');
-        } else {
-          return get([child], 'PropertyName.#text');
-        }
-      };
 
-      const children = get(sldFilter, filterIsFunction ? 'Function' : sldOperatorName) || [];
-      args = children.map(childrenToArgs);
-
-      if (sldOperatorName === 'PropertyIsNull') {
-        args[1] = null;
-      }
-
-      filter = [
-        comparisonOperator,
-        ...args
-      ] as ComparisonFilter;
+      filter = this.getFilterFromComparisonOperator(sldOperatorName, sldFilter);
 
     } else if (Object.keys(COMBINATION_MAP).includes(sldOperatorName)) {
       const combinationOperator: CombinationOperator = COMBINATION_MAP[
@@ -685,6 +718,97 @@ export class SldStyleParser implements StyleParser<string> {
       throw new Error(this.translate('noFilterDetected'));
     }
     return filter;
+  }
+
+  getFilterFromComparisonOperator(
+    sldOperatorName: ComparisonType | 'Function',
+    sldFilter: any
+  ): Filter {
+    if (sldOperatorName === 'Function') {
+      const functionName = Array.isArray(sldFilter) ? sldFilter[0][':@']['@_name'] : sldFilter[':@']['@_name'];
+      const tempFunctionName = functionName.charAt(0).toUpperCase() + functionName.slice(1);
+      sldOperatorName = `PropertyIs${tempFunctionName}` as ComparisonType;
+    }
+
+    const comparisonOperator: ComparisonOperator = COMPARISON_MAP[sldOperatorName] as ComparisonOperator;
+    const filterIsFunction = !!get(sldFilter, 'Function');
+    let args: (FunctionCall<unknown>|null)[] = [];
+
+    const children = get(sldFilter, filterIsFunction ? 'Function' : sldOperatorName) || [];
+    args = children.map((child: any, index: number) => {
+      const operatorName = Object.keys(child)?.[0];
+
+      if (ARITHMETIC_OPERATORS.includes(operatorName.toLowerCase() as ArithmeticType)) {
+        const arithmeticOperator = child[operatorName];
+        return this.getFilterArgsFromArithmeticOperators(operatorName as ArithmeticType, arithmeticOperator);
+      }
+
+      return this.getFilterArgsFromPropertyName(child, children, index);
+    });
+
+    if (sldOperatorName === 'PropertyIsNull') {
+      args[1] = null;
+    }
+
+    return [
+      comparisonOperator,
+      ...args
+    ] as ComparisonFilter;
+  }
+
+  /**
+   * Creates a FunctionCall from arithmetic operators in SLD filters.
+   * Handles nested arithmetic operations recursively.
+   */
+  getFilterArgsFromArithmeticOperators(
+    arithmeticOperatorName: ArithmeticType,
+    arithmeticOperator: any
+  ): FunctionCall<number> {
+    const [leftSide, rightSide] = arithmeticOperator;
+    return {
+      name: arithmeticOperatorName.toLowerCase() as FunctionCall<number>['name'],
+      args: [
+        this.processArithmeticOperand(leftSide, arithmeticOperator),
+        this.processArithmeticOperand(rightSide, arithmeticOperator)
+      ]
+    };
+  }
+
+  /**
+   * Processes a single operand in an arithmetic operation.
+   * If the operand is itself an arithmetic operator, processes it recursively.
+   */
+  private processArithmeticOperand(operand: any, parentOperator: any): any {
+    const operatorName = Object.keys(operand)?.[0];
+
+    if (operatorName && ARITHMETIC_OPERATORS.includes(operatorName.toLowerCase() as ArithmeticType)) {
+      return this.getFilterArgsFromArithmeticOperators(operatorName as ArithmeticType, operand[operatorName]);
+    }
+
+    return this.getFilterArgsFromPropertyName(operand, parentOperator, 0);
+  }
+
+  getFilterArgsFromPropertyName(
+    child: any,
+    children?: any,
+    index?: number
+  ): FunctionCall<unknown> {
+    const propName = get([child], 'PropertyName.#text');
+    if (propName !== undefined) {
+      const isSingleArgOperator = children.length === 1;
+      // Return property name for the first argument in case second argument is literal
+      // or isSingleArgOperator eg (PropertyIsNull)
+      if (isSingleArgOperator || (index === 0 && get([children[1]], 'PropertyName.#text') === undefined)) {
+        return propName;
+      }
+      // ..otherwise + (second argument) return as property function
+      return {
+        name: 'property',
+        args: [propName]
+      };
+    } else {
+      return get([child], '#text');
+    }
   }
 
   /**
@@ -834,6 +958,12 @@ export class SldStyleParser implements StyleParser<string> {
       const linePlacement = get(placement, 'LinePlacement');
       if (!isNil(pointPlacement)) {
         textSymbolizer.placement = 'point';
+        const anchorPoint = get(pointPlacement, 'AnchorPoint');
+        if (!isNil(anchorPoint)) {
+          const anchorX = get(anchorPoint, 'AnchorPointX.#text');
+          const anchorY = get(anchorPoint, 'AnchorPointY.#text');
+          textSymbolizer.anchor = this.getAnchorFromSldAnchorPoint(anchorX, anchorY);
+        }
         const displacement = get(pointPlacement, 'Displacement');
         if (!isNil(displacement)) {
           const x = get(displacement, 'DisplacementX.#text');
@@ -959,6 +1089,12 @@ export class SldStyleParser implements StyleParser<string> {
         graphicFill
       );
     }
+    if (this.isSldEnv(sldEnvGeoServer)) {
+      const graphicFillPadding = getVendorOptionValue(sldSymbolizer, 'graphic-margin');
+      if (!isNil(graphicFillPadding)) {
+        fillSymbolizer.graphicFillPadding = graphicFillPadding.split(/\s/).map(numberExpression);
+      }
+    }
     if (!isNil(color)) {
       fillSymbolizer.color = color;
     }
@@ -1078,11 +1214,46 @@ export class SldStyleParser implements StyleParser<string> {
     }
 
     switch (wellKnownName) {
+      case 'arrow':
+      case 'arrowhead':
+      case 'asterisk_fill':
+      case 'backslash':
       case 'circle':
-      case 'square':
-      case 'triangle':
-      case 'star':
       case 'cross':
+      case 'cross2':
+      case 'cross_fill':
+      case 'decagon':
+      case 'diagonal_half_square':
+      case 'diamond':
+      case 'equilateral_triangle':
+      case 'filled_arrowhead':
+      case 'half_arc':
+      case 'half_square':
+      case 'heart':
+      case 'hexagon':
+      case 'horline':
+      case 'left_half_triangle':
+      case 'line':
+      case 'octagon':
+      case 'parallelogram_left':
+      case 'parallelogram_right':
+      case 'pentagon':
+      case 'quarter_arc':
+      case 'quarter_circle':
+      case 'quarter_square':
+      case 'right_half_triangle':
+      case 'rounded_square':
+      case 'semi_circle':
+      case 'shield':
+      case 'slash':
+      case 'square':
+      case 'square_with_corners':
+      case 'star':
+      case 'star_diamond':
+      case 'third_arc':
+      case 'third_circle':
+      case 'trapezoid':
+      case 'triangle':
       case 'x':
       case 'shape://vertline':
       case 'shape://horline':
@@ -1093,6 +1264,13 @@ export class SldStyleParser implements StyleParser<string> {
       case 'shape://times':
       case 'shape://oarrow':
       case 'shape://carrow':
+      case 'brush://dense1':
+      case 'brush://dense2':
+      case 'brush://dense3':
+      case 'brush://dense4':
+      case 'brush://dense5':
+      case 'brush://dense6':
+      case 'brush://dense7':
         markSymbolizer.wellKnownName = wellKnownName;
         break;
       default:
@@ -1116,6 +1294,11 @@ export class SldStyleParser implements StyleParser<string> {
     const strokeOpacity = getParameterValue(strokeEl, 'stroke-opacity', this.readingSldVersion);
     if (!isNil(strokeOpacity)) {
       markSymbolizer.strokeOpacity = numberExpression(strokeOpacity);
+    }
+    const strokeDasharray = getParameterValue(strokeEl, 'stroke-dasharray', this.readingSldVersion);
+    if (!isNil(strokeDasharray)) {
+      const dashStringAsArray = strokeDasharray.split(' ').map(numberExpression);
+      markSymbolizer.strokeDasharray = dashStringAsArray;
     }
 
     return markSymbolizer;
@@ -1494,7 +1677,7 @@ export class SldStyleParser implements StyleParser<string> {
       const functionChildren: any = [];
 
       if (isGeoStylerFunction(key)) {
-        functionChildren.unshift(keyResult?.[0]);
+        functionChildren.unshift(Array.isArray(keyResult) ? keyResult?.[0] : keyResult);
       } else {
         functionChildren.unshift({
           Literal: [{
@@ -1504,7 +1687,7 @@ export class SldStyleParser implements StyleParser<string> {
       }
 
       if (isGeoStylerFunction(value)) {
-        functionChildren.push(valueResult?.[0]);
+        functionChildren.push(Array.isArray(valueResult) ? valueResult?.[0] : valueResult);
       } else {
         functionChildren.push({
           Literal: [{
@@ -1766,7 +1949,7 @@ export class SldStyleParser implements StyleParser<string> {
           });
         }
       }
-      if (markSymbolizer.strokeWidth) {
+      if (!isNil(markSymbolizer.strokeWidth)) {
         if (isGeoStylerFunction(markSymbolizer.strokeWidth)) {
           const children = geoStylerFunctionToSldFunction(markSymbolizer.strokeWidth);
           strokeCssParameters.push({
@@ -1802,6 +1985,26 @@ export class SldStyleParser implements StyleParser<string> {
             }],
             ':@': {
               '@_name': 'stroke-opacity'
+            }
+          });
+        }
+      }
+      if (!isNil(markSymbolizer.strokeDasharray)) {
+        if (isGeoStylerFunction(markSymbolizer.strokeDasharray)) {
+          const children = geoStylerFunctionToSldFunction(markSymbolizer.strokeDasharray);
+          strokeCssParameters.push({
+            [CssParameter]: children,
+            ':@': {
+              '@_name': 'stroke-dasharray'
+            }
+          });
+        } else {
+          strokeCssParameters.push({
+            [CssParameter]: [{
+              '#text': markSymbolizer.strokeDasharray?.join(' '),
+            }],
+            ':@': {
+              '@_name': 'stroke-dasharray'
             }
           });
         }
@@ -1846,7 +2049,7 @@ export class SldStyleParser implements StyleParser<string> {
       });
     }
 
-    if (markSymbolizer.offset && this.sldVersion === '1.1.0') {
+    if (markSymbolizer.offset && (this.sldVersion === '1.1.0' || this.isSldEnv(sldEnvGeoServer))) {
       graphic.push({
         [Displacement]: [{
           [DisplacementX]: [{
@@ -1863,6 +2066,30 @@ export class SldStyleParser implements StyleParser<string> {
     return [{
       [Graphic]: graphic
     }];
+  }
+
+  /**
+   * Push a new GeoServerVendorOption in the given array if such options are allowed.
+   */
+  pushGeoServerVendorOption(elementArray: any[], name: string, text: string) {
+    if (this.isSldEnv(sldEnvGeoServer)) {
+      elementArray.push(this.createGeoServerVendorOption(name, text));
+    }
+  }
+
+  /**
+   * @returns <VendorOption name="name">text</VendorOption>
+   */
+  createGeoServerVendorOption(name: string, text: string) {
+    const VendorOption = this.getTagName('VendorOption');
+    return {
+      [VendorOption]: [{
+        '#text': text,
+      }],
+      ':@': {
+        '@_name': name,
+      }
+    };
   }
 
   /**
@@ -1915,6 +2142,7 @@ export class SldStyleParser implements StyleParser<string> {
             '#text': 'image/svg+xml'
           }];
           break;
+        case undefined:
         default:
           break;
       }
@@ -1960,6 +2188,68 @@ export class SldStyleParser implements StyleParser<string> {
   }
 
   /**
+   * Translates an anchor-setting into SLD-anchor-numbers
+   */
+  getSldAnchorPointFromAnchor(anchor: TextSymbolizer['anchor'], dimension: 'x' | 'y'): number {
+    if (!anchor || isGeoStylerFunction(anchor)) {
+      return 0;
+    }
+    // As explained in https://docs.geoserver.org/main/en/user/styling/sld/reference/labeling.html#anchorpoint,
+    // we have the following translation for anchors:
+    // x-dimension
+    //   left -> 0.0
+    //   center -> 0.5
+    //   right -> 1.0
+    // y-dimension
+    //   top -> 1.0
+    //   middle -> 0.5
+    //   bottom -> 0.0
+
+    if (dimension === 'x') {
+      if (anchor.indexOf('left') >= 0) {
+        return 0.0;
+      }
+      else if (anchor.indexOf('right') >= 0) {
+        return 1.0;
+      }
+      else {
+        return 0.5;
+      }
+    }
+    else {
+      if (anchor.indexOf('bottom') >= 0) {
+        return 0.0;
+      }
+      else if (anchor.indexOf('top') >= 0) {
+        return 1.0;
+      }
+      else {
+        return 0.5;
+      }
+    }
+  }
+
+  /**
+   * Translates a SLD-anchor-number into a geostyler anchor-setting
+   */
+  getAnchorFromSldAnchorPoint(anchorX: any, anchorY: any): TextSymbolizer['anchor'] | undefined {
+
+    if (!isNumber(anchorX) || !isNumber(anchorY)) {
+      return undefined;
+    }
+    // see comment in getSldAnchorPointFromAnchor
+
+    const gsAnchorHoriz = anchorX < 0.25 ? 'left' : anchorX > 0.75 ? 'right' : '';
+    const gsAnchorVert = anchorY < 0.25 ? 'bottom' : anchorY > 0.75 ? 'top' : '';
+    const gsAnchor: TextSymbolizer['anchor'] = ((gsAnchorHoriz && gsAnchorVert) ?
+      (gsAnchorVert + '-' +gsAnchorHoriz) : (gsAnchorVert + gsAnchorHoriz)) as TextSymbolizer['anchor'];
+
+    // for not breaking existing tests like "can read the geoserver popshade.sld", we treat
+    // a center anchor as the default and deliver undefined in this case (instead of 'center')
+    return gsAnchor ? gsAnchor : undefined;
+  }
+
+  /**
    * Get the SLD Object (readable with fast-xml-parser) from a geostyler-style TextSymbolizer.
    *
    * @param textSymbolizer A geostyler-style TextSymbolizer.
@@ -1973,12 +2263,16 @@ export class SldStyleParser implements StyleParser<string> {
     const Displacement = this.getTagName('Displacement');
     const DisplacementX = this.getTagName('DisplacementX');
     const DisplacementY = this.getTagName('DisplacementY');
+    const AnchorPoint = this.getTagName('AnchorPoint');
+    const AnchorPointX = this.getTagName('AnchorPointX');
+    const AnchorPointY = this.getTagName('AnchorPointY');
     const LabelPlacement = this.getTagName('LabelPlacement');
     const PointPlacement = this.getTagName('PointPlacement');
     const LinePlacement = this.getTagName('LinePlacement');
     const Rotation = this.getTagName('Rotation');
     const Radius = this.getTagName('Radius');
     const Label = this.getTagName('Label');
+    const PerpendicularOffset = this.getTagName('PerpendicularOffset');
 
     const sldTextSymbolizer: any = [{
       [Label]: textSymbolizer.label ? this.getSldLabelFromTextSymbolizer(textSymbolizer.label) : undefined
@@ -2026,10 +2320,15 @@ export class SldStyleParser implements StyleParser<string> {
     if (textSymbolizer.placement === 'line') {
       sldTextSymbolizer.push({
         [LabelPlacement]: [{
-          [LinePlacement]: []
+          [LinePlacement]: [{
+            [PerpendicularOffset]: [{
+              '#text': textSymbolizer.perpendicularOffset?.toString()
+            }]
+          }]
         }]
       });
     } else if (Number.isFinite(textSymbolizer.offset)
+      || textSymbolizer.anchor
       || textSymbolizer.rotate !== undefined
       || textSymbolizer.placement === 'point'
     ) {
@@ -2043,6 +2342,19 @@ export class SldStyleParser implements StyleParser<string> {
           }, {
             [DisplacementY]: [{
               '#text': (-textSymbolizer.offset[1]).toString()
+            }]
+          }]
+        });
+      }
+      if (textSymbolizer.anchor) {
+        pointPlacement.push({
+          [AnchorPoint]: [{
+            [AnchorPointX]: [{
+              '#text': this.getSldAnchorPointFromAnchor(textSymbolizer.anchor,'x').toString()
+            }]
+          }, {
+            [AnchorPointY]: [{
+              '#text': this.getSldAnchorPointFromAnchor(textSymbolizer.anchor,'y').toString()
             }]
           }]
         });
@@ -2454,16 +2766,17 @@ export class SldStyleParser implements StyleParser<string> {
 
     const polygonSymbolizer: any = [];
     if (fillCssParameters.length > 0 || graphicFill) {
-      if (!Array.isArray(polygonSymbolizer?.[0]?.[Fill])) {
-        polygonSymbolizer[0] = { [Fill]: [] };
+      const fillArray: any[] = [];
+      const graphicFillPadding = fillSymbolizer.graphicFillPadding;
+      if (graphicFillPadding) {
+        this.pushGeoServerVendorOption(polygonSymbolizer, 'graphic-margin', graphicFillPadding.join(' '));
       }
+      polygonSymbolizer.push({ [Fill]: fillArray });
       if (fillCssParameters.length > 0) {
-        polygonSymbolizer[0][Fill].push(...fillCssParameters);
+        fillArray.push(...fillCssParameters);
       }
       if (graphicFill) {
-        polygonSymbolizer[0][Fill].push({
-          GraphicFill: graphicFill
-        });
+        fillArray.push({ GraphicFill: graphicFill });
       }
     }
 
@@ -2666,6 +2979,11 @@ export class SldStyleParser implements StyleParser<string> {
           } else {
             Object.keys(symbolizer).forEach(property => {
               if (value[property]) {
+                const propValue = new RegExp(`["']${symbolizer[property as keyof typeof symbolizer]}["']`);
+                if (value[property].support === 'partial' && (propValue.test(value[property].info)))
+                {
+                  return;
+                }
                 if (!unsupportedProperties.Symbolizer) {
                   unsupportedProperties.Symbolizer = {};
                 }

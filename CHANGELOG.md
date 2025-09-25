@@ -1,3 +1,78 @@
+## [8.1.0](https://github.com/geostyler/geostyler-sld-parser/compare/v8.0.1...v8.1.0) (2025-06-18)
+
+### Features
+
+* add more wellknownnames ([c08a055](https://github.com/geostyler/geostyler-sld-parser/commit/c08a055d589b24fa01df0b2d7d077a56579438b1))
+* add support for arithmetic functions in sld filter ([#981](https://github.com/geostyler/geostyler-sld-parser/issues/981), [#1010](https://github.com/geostyler/geostyler-sld-parser/issues/1010)) ([0b9eda4](https://github.com/geostyler/geostyler-sld-parser/commit/0b9eda48d6ad650cc88a06e6389c04b878af5f41))
+
+### Bug Fixes
+
+* replace dense5 wellknownname that is now supported ([359e5d1](https://github.com/geostyler/geostyler-sld-parser/commit/359e5d16e190b787f3f618eeaceee6f72c6a4279))
+* use geostyler-style 10.3 to fix build ([aaad9e5](https://github.com/geostyler/geostyler-sld-parser/commit/aaad9e5208708109defdd600de142433b453de6e))
+
+## [8.0.1](https://github.com/geostyler/geostyler-sld-parser/compare/v8.0.0...v8.0.1) (2025-06-06)
+
+### Bug Fixes
+
+* use geostyler-style 10.2 to fix build ([4d5cbdc](https://github.com/geostyler/geostyler-sld-parser/commit/4d5cbdcbc201f5357b2bd624ac8eaf28aaee9413))
+
+## [8.0.0](https://github.com/geostyler/geostyler-sld-parser/compare/v7.3.0...v8.0.0) (2025-06-06)
+
+### ⚠ BREAKING CHANGES
+
+* GeoServerVendorOption was too restrictive. You can
+now provide an sldEnvironment: GeoServer parameter. It adds
+VendorOption support.
+
+### Features
+
+* add displacement from point offset for geoserver ([e13db64](https://github.com/geostyler/geostyler-sld-parser/commit/e13db64f38c082f293e40d7ca636cce2e63ff333))
+* drop geoservervendoroption add sldenvironment ([2eda7a6](https://github.com/geostyler/geostyler-sld-parser/commit/2eda7a6a15ac04f98a780149ec8e399343870595))
+* support dasharray in stroke in mark symbolizer ([bfc2aa8](https://github.com/geostyler/geostyler-sld-parser/commit/bfc2aa8d28ef6eb4d31f7bdd6d42ed5916684423))
+
+### Bug Fixes
+
+* **#993:** add missing code ([b206151](https://github.com/geostyler/geostyler-sld-parser/commit/b206151a1dd7b1d5018432031259ff3611d3908f)), closes [#993](https://github.com/geostyler/geostyler-sld-parser/issues/993)
+* **deps:** update dependency geostyler-style to v10.1.0 ([82e0f77](https://github.com/geostyler/geostyler-sld-parser/commit/82e0f77ad0d8669115b68b16c0eb7f9e807293d5))
+* fix and cleanup workflows ([bf104b3](https://github.com/geostyler/geostyler-sld-parser/commit/bf104b3661b3effc199eaa74094d9766461ebeff))
+* join graphic-margin values with spaces for GeoServer vendor option ([fe8db5b](https://github.com/geostyler/geostyler-sld-parser/commit/fe8db5b55daa6c9db2a0951fafcc06c43b154b75))
+* support only spaces as separator in vendor-option graphic-margin ([b01783d](https://github.com/geostyler/geostyler-sld-parser/commit/b01783d60af29afd00538155e3bcf3ad531321ed))
+* support spaces as separator for vendor-option graphic-margin ([9e357b1](https://github.com/geostyler/geostyler-sld-parser/commit/9e357b1bbd811254206848f9b9e9894c576f8b05))
+* update geostyler-style imports ([9b5c088](https://github.com/geostyler/geostyler-sld-parser/commit/9b5c08894d6764572d5b2d23cc84ccbb65b62b6a))
+
+## [7.3.0](https://github.com/geostyler/geostyler-sld-parser/compare/v7.2.1...v7.3.0) (2025-02-19)
+
+
+### Features
+
+* add wellknownnames to support qgis markers ([#978](https://github.com/geostyler/geostyler-sld-parser/issues/978)) ([04b9090](https://github.com/geostyler/geostyler-sld-parser/commit/04b90901334c11da87cbf31282046f0504cc2570))
+
+## [7.2.1](https://github.com/geostyler/geostyler-sld-parser/compare/v7.2.0...v7.2.1) (2025-01-14)
+
+
+### Bug Fixes
+
+* linting ([#976](https://github.com/geostyler/geostyler-sld-parser/issues/976)) ([f0563be](https://github.com/geostyler/geostyler-sld-parser/commit/f0563be94455bda70c1394e9dc6a4fe204ff047c))
+
+## [7.2.0](https://github.com/geostyler/geostyler-sld-parser/compare/v7.1.0...v7.2.0) (2025-01-14)
+
+
+### Features
+
+* property to property comparison ([#975](https://github.com/geostyler/geostyler-sld-parser/issues/975)) ([72c794e](https://github.com/geostyler/geostyler-sld-parser/commit/72c794e2524f8ad0f8068d9f0d24a11f853980b1))
+
+## [7.1.0](https://github.com/geostyler/geostyler-sld-parser/compare/v7.0.0...v7.1.0) (2025-01-13)
+
+
+### Features
+
+* add vendor-option graphic-margin ([#971](https://github.com/geostyler/geostyler-sld-parser/issues/971)) ([be950ea](https://github.com/geostyler/geostyler-sld-parser/commit/be950eae89dd262e2018fbdca9fab6ceba75d83d))
+
+
+### Bug Fixes
+
+* update image format handling ([0093c6b](https://github.com/geostyler/geostyler-sld-parser/commit/0093c6b979affc4db005d7fb0868c87f9504a063))
+
 ## [7.0.0](https://github.com/geostyler/geostyler-sld-parser/compare/v6.1.2...v7.0.0) (2024-10-09)
 
 
